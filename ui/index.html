@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0b0c10" />
+  <title>Marlowe Studio — AI Contract Workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;450;500;550;600;650;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#" aria-label="Marlowe Studio home">
+        <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 24V8l9 10 9-10v16M7 8h4m10 0h4"/></svg></span>
+        <span class="brand-copy"><b>Marlowe</b><small>STUDIO <i>·</i> RESEARCH</small></span>
+      </a>
+      <div class="workspace-switch"><span class="workspace-avatar">M</span><span><b>Research workspace</b><small>Local environment</small></span><svg class="chevron" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></div>
+
+      <div class="nav-label">WORKSPACE</div>
+      <nav class="nav-list" aria-label="Main navigation">
+        <button class="nav-item active" data-view="compose"><span class="nav-icon">✳</span><span>Tạo hợp đồng</span><kbd>⌘ 1</kbd></button>
+        <button class="nav-item" data-view="clarify"><span class="nav-icon">◌</span><span>Làm rõ yêu cầu</span><span class="nav-count">2</span></button>
+        <button class="nav-item" data-view="intent"><span class="nav-icon">◎</span><span>Duyệt ý định</span></button>
+        <button class="nav-item" data-view="candidate"><span class="nav-icon">⌘</span><span>Hợp đồng AST</span></button>
+        <button class="nav-item" data-view="evidence"><span class="nav-icon">◇</span><span>Bằng chứng</span></button>
+        <button class="nav-item" data-view="scenario"><span class="nav-icon">⇄</span><span>Kịch bản tham chiếu</span></button>
+        <button class="nav-item" data-view="explore"><span class="nav-icon">⌁</span><span>Khám phá & ledger</span></button>
+        <button class="nav-item" data-view="history"><span class="nav-icon">◷</span><span>Lịch sử phiên</span></button>
+      </nav>
+
+      <div class="sidebar-divider"></div>
+      <div class="nav-label">RECENT RUNS</div>
+      <button class="recent-run" data-view="history"><span class="run-dot dot-gray"></span><span><b>Escrow · Dell XPS 13</b><small>Chưa khởi chạy · Bản nháp</small></span></button>
+      <button class="recent-run" data-view="history"><span class="run-dot dot-gray"></span><span><b>Hợp đồng thuê nhà</b><small>Chưa khởi chạy · Bản nháp</small></span></button>
+
+      <div class="sidebar-bottom">
+        <div class="backend-status"><span class="status-led"></span><span><b>Backend chưa kết nối</b><small>Giao diện xem trước</small></span></div>
+        <button class="profile-button"><span class="profile-avatar">QN</span><span><b>Local reviewer</b><small>Chưa xác thực danh tính</small></span><span class="more">···</span></button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="mobile-menu icon-button" id="mobileMenu" aria-label="Mở menu">☰</button>
+        <div class="breadcrumb"><span>Workspace</span><span class="crumb-slash">/</span><b id="crumbTitle">Tạo hợp đồng</b></div>
+        <div class="top-actions">
+          <button class="provider-pill" id="openSettings"><span class="provider-symbol">✳</span><span class="provider-text"><b id="providerLabel">Thiết lập model</b><small id="modelLabel">Chưa cấu hình API</small></span><span class="chevron-down">⌄</span></button>
+          <span class="top-divider"></span>
+          <button class="icon-button theme-toggle" id="themeToggle" aria-label="Đổi giao diện">◐</button>
+          <button class="help-button" title="Trợ giúp">?</button>
+        </div>
+      </header>
+
+      <div class="content-wrap">
+        <div class="preview-banner"><span class="preview-icon">i</span><span><b>Frontend preview</b> — Giao diện chưa kết nối backend; thao tác tạo phiên chưa gửi prompt tới model.</span><button id="bannerClose" aria-label="Đóng">×</button></div>
+        <div class="view-container" id="viewContainer"></div>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-scrim" id="settingsScrim" hidden>
+    <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head"><div><div class="eyebrow">MODEL CONNECTION</div><h2 id="settingsTitle">Cấu hình API</h2><p>Kết nối model qua provider tương thích với OpenAI API.</p></div><button class="icon-button close-modal" id="closeSettings" aria-label="Đóng">×</button></div>
+      <div class="secure-note"><span>◈</span><div><b>Key chỉ lưu trong phiên trang này</b><small>Không ghi vào localStorage, file hay telemetry. Hiện chưa có backend để gửi key và chạy model.</small></div></div>
+      <label class="field-label" for="providerSelect">Nhà cung cấp</label>
+      <select class="field-control" id="providerSelect"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="custom">Custom OpenAI-compatible</option></select>
+      <label class="field-label" for="modelInput">Model ID</label>
+      <input class="field-control mono" id="modelInput" placeholder="vd. anthropic/claude-sonnet-4" autocomplete="off" />
+      <label class="field-label" for="keyInput">API key</label>
+      <div class="key-field"><input class="field-control mono" id="keyInput" type="password" placeholder="Dán API key tại đây" autocomplete="new-password" /><button id="toggleKey" type="button">Hiện</button></div>
+      <div class="custom-endpoint" id="customEndpointWrap" hidden><label class="field-label" for="endpointInput">Base URL</label><input class="field-control mono" id="endpointInput" placeholder="https://api.example.com/v1" autocomplete="off" /></div>
+      <div class="modal-error" id="settingsError" hidden>Nhập Model ID và API key để lưu cấu hình tạm trong phiên.</div>
+      <div class="modal-foot"><button class="button button-quiet" id="clearSettings">Xóa cấu hình phiên</button><button class="button button-primary" id="saveSettings">Lưu trong phiên <span>→</span></button></div>
+      <p class="modal-footnote">Không dán key vào ảnh chụp màn hình hoặc gửi trong chat. Nút lưu chỉ giữ key tạm trong bộ nhớ tab hiện tại.</p>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
