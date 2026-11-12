@@ -1,43 +1,32 @@
-# Marlowe Studio UI preview
+# Marlowe Studio UI and local bridge
 
-Static, dependency-free frontend concept for the AI-Agent-SC research pipeline.
+This repo pairs the browser UI with the project's real interactive orchestration pipeline.
 
-## Run locally
+## Start the MVP
 
-From the repository root:
+From the repository root in PowerShell:
 
 ```powershell
-python -m http.server 4173 --directory ui
+python -m pip install -r requirements.txt
+python -m research.web.server
 ```
 
-Open `http://127.0.0.1:4173`.
+Open <http://127.0.0.1:4173>. This single local server serves the UI and `/api` routes. It binds to `127.0.0.1` only. Stop it with `Ctrl+C`.
 
-## Included screens
+Configure a provider, Model ID, and API key in the UI. The key stays in tab memory until the tab closes, is sent to the local bridge when a session starts, and is passed to the selected provider. It is not written to disk or included in run logs. OpenAI, OpenRouter, Gemini, and an OpenAI-compatible custom endpoint are supported. Custom public endpoints must use HTTPS.
 
-1. Contract prompt and benchmark-family selector.
-2. Clarification and requirement-history view.
-3. IntentSpec review and explicit ratification boundary.
-4. Marlowe Core V1 candidate and mapping evidence.
-5. AST/lint, SMT, comparison, exploration and authority gates.
-6. User-reviewed behavior expectation/reference comparison.
-7. Bounded exploration, property observations and opt-in ledger-size analysis.
-8. Run history and sanitized usage metadata.
+## Real interactive flow
 
-The provider dialog accepts a provider, model ID and API key. The API key is held only in the current page's JavaScript memory, cleared from the password input when the dialog closes, and never written to local storage or sent by this preview. The endpoint field appears only for a custom OpenAI-compatible provider.
+1. The browser posts the natural-language prompt and transient model configuration to the local bridge.
+2. `research.web.server` creates `ModelTransport` and calls `research.orchestration.cli_runner.run_session` with interactive callbacks.
+3. The UI polls session events. Clarification questions block the run until the user replies; answers become versioned requirement history in the pipeline.
+4. When extraction resolves, the UI displays the complete IntentSpec and requires explicit approval tied to that exact spec before generation.
+5. The result and diagnostics are shown from the backend payload. A generated contract remains `CANDIDATE_ONLY`; the UI does not sign, submit, or deploy it.
 
-## Conversational requirement flow
+Sessions and prompts remain in server memory only and disappear when the server restarts; this MVP does not persist UI run history. The server never prints request bodies or keys. This is a local development MVP, not a multi-user or internet-facing service.
 
-The primary workspace is a multi-turn chat surface. The UI communicates the intended sequence: initial natural-language request, clarification questions and user replies, explicit IntentSpec review, then Marlowe candidate generation. The “Xem hội thoại minh họa” control runs a clearly labeled static UI scenario only; it does not call an AI provider or claim to be a real backend response. Submitting a real draft currently reports that the backend is not connected.
+## Integration scope and limitations
 
-## Current integration boundary
+The UI is wired to real prompting, multi-turn clarification, explicit IntentSpec approval, candidate output, and run diagnostics. SMT, reference, exploration, and ledger stages keep the backend's real availability and evidence limits; unavailable tools are not represented as passing. The current chat flow does not yet collect an independent reference expectation or configure a ledger node. Family selection is an organizational hint and is not passed as a deterministic compiler profile.
 
-This repo exposes the interactive pipeline through `research/orchestration/cli_runner.py`; it does not currently expose HTTP routes for a browser client. Buttons that would start runs, approve intent, or execute analyzers are therefore disabled or report that no backend connection exists. The UI does not generate fake LLM, SMT, reference, exploration or ledger results.
-
-The family selector lists the 19 contract families represented in dataset v4 (omitting its `infeasible` test class) plus a custom option. These are prompt-organization hints. A selected family is not a claim that a matching deterministic compiler/profile is implemented or verified in the runtime pipeline.
-
-## UI conventions
-
-- `PASS/VALID`, `FAIL/INVALID`, `BLOCKED/UNAVAILABLE`, and `INCONCLUSIVE` must remain distinct when API data is connected.
-- A successful gate is scoped to that gate's declared model and evidence.
-- Generated Marlowe remains `CANDIDATE_ONLY`; testnet and deployment are disabled in the current backend.
-- The page has dark and light themes and adapts to tablet/mobile widths.
+See the main [README](../README.md) for pipeline architecture and existing tool prerequisites.

@@ -64,7 +64,7 @@
   <div class="modal-scrim" id="settingsScrim" hidden>
     <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
       <div class="modal-head"><div><div class="eyebrow">MODEL CONNECTION</div><h2 id="settingsTitle">Cấu hình API</h2><p>Kết nối model qua provider tương thích với OpenAI API.</p></div><button class="icon-button close-modal" id="closeSettings" aria-label="Đóng">×</button></div>
-      <div class="secure-note"><span>◈</span><div><b>Key chỉ lưu trong phiên trang này</b><small>Không ghi vào localStorage, file hay telemetry. Hiện chưa có backend để gửi key và chạy model.</small></div></div>
+      <div class="secure-note"><span>◈</span><div><b>Key chỉ lưu trong phiên trang này</b><small>Key chỉ nằm trong bộ nhớ tab; khi bắt đầu phiên sẽ gửi tới máy chủ localhost và provider đã chọn. Không ghi vào file hoặc request log.</small></div></div>
       <label class="field-label" for="providerSelect">Nhà cung cấp</label>
       <select class="field-control" id="providerSelect"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="custom">Custom OpenAI-compatible</option></select>
       <label class="field-label" for="modelInput">Model ID</label>

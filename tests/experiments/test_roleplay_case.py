@@ -1,0 +1,308 @@
+"""Roleplay case runner must reuse the same model candidate after a restart."""
+
+from copy import deepcopy
+import json
+
+import pytest
+
+from research.experiments import roleplay_case
+from research.adapters.smt_driver import DRIVER_VERSION, UPSTREAM_COMMIT
+from research.formalization.intent_spec import CORE_SCHEMA_VERSION_V3, CORE_SCHEMA_VERSION_V4
+from research.formalization.repair_policy import REPAIR_POLICY_VERSION
+from tests.synthesis.test_funded_choice_v1 import funded_choice_core
+
+
+def test_remaining_cases_preserve_frozen_batch_identity():
+    _, first = roleplay_case.load_batch()
+    assert roleplay_case._case_at(20) == first[-1]
+    assert roleplay_case._case_at(21)["id"] == "vi-vesting-L2-003"
+    assert roleplay_case._case_at(100)["id"] == "vi-infeasible-L3-005"
+    with pytest.raises(ValueError, match="outside frozen"):
+        roleplay_case._case_at(101)
+
+
+def test_roleplay_resume_keeps_only_requirement_answers():
+    history = [{"version": 1, "messages": ["Initial"]},
+               {"version": 2, "messages": ["Bình sẽ nạp 20 ADA."]}]
+    transcript = [{"question": "Ai nạp?", "answer": "Bình sẽ nạp 20 ADA.",
+                   "synthetic_assumption": True},
+                  {"question": "Review trace?", "answer": "dong y",
+                   "synthetic_assumption": True}]
+    assert roleplay_case._source_transcript(history, transcript) == transcript[:1]
+
+
+def test_interrupted_outbound_attempt_number_is_never_reused(tmp_path):
+    (tmp_path / "attempt-001.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "outbound-attempts.jsonl").write_text(
+        '{"attempt": 2, "phase": "generation"}\n', encoding="utf-8")
+    assert roleplay_case._next_attempt(tmp_path) == 3
+
+
+def test_implicit_core_replay_requires_current_policy_version(tmp_path):
+    history = [{"version": 1, "messages": ["Initial"]}]
+    candidate_id = "intent-candidate:older-policy"
+    candidate = {"semantic_core": {"schema_version": CORE_SCHEMA_VERSION_V3,
+                                   "requirement_history": history},
+                 "initial_core_validation_errors": []}
+    record = {"candidate": candidate,
+              "steps": {"intent_extraction": {
+                  "output_artifacts": [candidate_id],
+                  "telemetry": {"repair_policy_version": "older-policy"}}},
+              "artifacts": {candidate_id: {"payload": candidate}}}
+    roleplay_case._write_exclusive(tmp_path / "attempt-001.json", record)
+    assert roleplay_case._reusable_core(
+        tmp_path, history, require_policy_version=REPAIR_POLICY_VERSION) is None
+    assert roleplay_case._reusable_core(
+        tmp_path, history, candidate_id=candidate_id)[1] == candidate_id
+    replayed = deepcopy(record)
+    replayed["replayed_core_candidate_id"] = candidate_id
+    replayed["steps"]["intent_extraction"]["telemetry"]["repair_policy_version"] = (
+        REPAIR_POLICY_VERSION)
+    roleplay_case._write_exclusive(tmp_path / "attempt-002.json", replayed)
+    assert roleplay_case._reusable_core(
+        tmp_path, history, require_policy_version=REPAIR_POLICY_VERSION) is None
+
+
+def test_repeated_nonprogressing_case_pauses_before_model_call(monkeypatch, tmp_path):
+    prompt = "Minh lends Quynh 101 ADA."
+    history = [{"version": 1, "messages": [prompt]}]
+    monkeypatch.setattr(roleplay_case, "load_batch", lambda: ({}, [
+        {"id": "case-1", "prompt": prompt}]))
+    monkeypatch.setattr(roleplay_case, "ModelTransport", lambda **_kwargs:
+                        (_ for _ in ()).throw(AssertionError("model must not initialize")))
+    case_dir = tmp_path / "case-01"
+    case_dir.mkdir()
+    for attempt, count in ((1, 2), (2, 3)):
+        record = {"case_id": "case-1", "requirement_history": history,
+                  "simulation_transcript": [], "stop_reason": "invalid_candidate",
+                  "steps": {"intent_extraction": {"telemetry": {
+                      "repair_policy_version": REPAIR_POLICY_VERSION,
+                      "final_error_codes": ["SCOPE_GRAPH"],
+                      "final_error_count": count}}}}
+        roleplay_case._write_exclusive(
+            case_dir / f"attempt-{attempt:03d}.json", record)
+    assert roleplay_case._repair_stalled(case_dir, history)
+    assert not roleplay_case._repair_stalled(
+        case_dir, history + [{"version": 2, "messages": ["Clarified."]}])
+    result = roleplay_case.run_case(1, run_dir=tmp_path)
+    assert result["stop_reason"] == "repair_stalled"
+    assert result["model_usage_this_attempt"]["api_calls"] == 0
+    assert (case_dir / "attempt-003.json").exists()
+
+
+@pytest.mark.parametrize("needs_repair", [False, True])
+def test_restarting_reviewed_case_replays_candidate_without_new_calls(
+        monkeypatch, tmp_path, needs_repair):
+    core = funded_choice_core()
+    core["schema_version"] = CORE_SCHEMA_VERSION_V4
+    prompt = core["requirement_history"][0]["messages"][0]
+    monkeypatch.setattr(roleplay_case, "load_batch", lambda: ({}, [{"id": "case-1",
+                                                                     "prompt": prompt}]))
+    monkeypatch.setattr(roleplay_case, "config_from_environment", lambda: None)
+    monkeypatch.setattr("research.adapters.smt_gate.analyze", lambda *_a, **_k: {
+        "status": "Valid", "warnings": [], "analysis_notes": [],
+        "meta": {"upstream_commit": UPSTREAM_COMMIT, "driver_version": DRIVER_VERSION},
+    })
+
+    class FakeTransport:
+        model = "fake"
+        total_calls = 0
+        core_calls = 0
+
+        def __init__(self, *, before_request, **_kwargs):
+            self.before_request = before_request
+            self.llm_calls = 0
+            self.call_log = []
+
+        def set_call_budget(self, _limit):
+            pass
+
+        def generate(self, system, _user):
+            self.before_request("generation")
+            self.llm_calls += 1
+            FakeTransport.total_calls += 1
+            if "Generate one canonical Marlowe" in system:
+                return {"contract": "close", "mapping_evidence": []}
+            FakeTransport.core_calls += 1
+            if needs_repair and FakeTransport.core_calls == 1:
+                invalid = deepcopy(core)
+                invalid["claims"] = None
+                return invalid
+            return deepcopy(core)
+
+        def usage_summary(self):
+            return {"api_calls": self.llm_calls}
+
+    monkeypatch.setattr(roleplay_case, "ModelTransport", FakeTransport)
+    first = roleplay_case.run_case(
+        1, repair_attempts=int(needs_repair), run_dir=tmp_path)
+    candidate_id = first["steps"]["intent_extraction"]["output_artifacts"][0]
+    assert first["status"] == "WAITING_RESEARCH_REVIEW"
+    first_calls = 2 if needs_repair else 1
+    assert FakeTransport.total_calls == first_calls
+    assert first["steps"]["intent_extraction"]["telemetry"]["physical_calls"] == first_calls
+    assert bool(first["candidate"]["initial_core_validation_errors"]) is needs_repair
+
+    second = roleplay_case.run_case(1, reviewed_candidate_id=candidate_id,
+                                         run_dir=tmp_path)
+    assert second["status"] == "SIMULATED_CANDIDATE_ONLY"
+    assert second["steps"]["intent_extraction"]["telemetry"]["physical_calls"] == 0
+    assert second["steps"]["compile"]["telemetry"]["physical_calls"] == 1
+    assert second["steps"]["intent_extraction"]["output_artifacts"][0] == candidate_id
+    assert second["model_usage_this_attempt"]["api_calls"] == 1
+    assert FakeTransport.total_calls == first_calls + 1
+    contract_id = second["steps"]["compile"]["output_artifacts"][0]
+
+    third = roleplay_case.run_case(1, reviewed_candidate_id=candidate_id,
+                                        replay_contract_id=contract_id,
+                                        run_dir=tmp_path)
+    assert third["status"] == "SIMULATED_CANDIDATE_ONLY"
+    assert third["steps"]["compile"]["output_artifacts"] == [contract_id]
+    assert third["steps"]["compile"]["telemetry"]["physical_calls"] == 0
+    assert third["model_usage_this_attempt"]["api_calls"] == 0
+    assert FakeTransport.total_calls == first_calls + 1
+
+
+def test_repair_reuses_exact_invalid_candidate_without_rewriting_it(monkeypatch, tmp_path):
+    core = funded_choice_core()
+    core["schema_version"] = CORE_SCHEMA_VERSION_V4
+    prompt = core["requirement_history"][0]["messages"][0]
+    monkeypatch.setattr(roleplay_case, "load_batch", lambda: ({}, [
+        {"id": "case-1", "prompt": prompt}]))
+    monkeypatch.setattr(roleplay_case, "config_from_environment", lambda: None)
+
+    class FakeTransport:
+        model = "fake-repair"
+
+        def __init__(self, *, before_request, **_kwargs):
+            self.before_request = before_request
+            self.llm_calls = 0
+            self.call_log = []
+
+        def set_call_budget(self, _limit):
+            pass
+
+        def generate(self, _system, _user):
+            self.before_request("generation")
+            self.llm_calls += 1
+            return deepcopy(core)
+
+        def usage_summary(self):
+            return {"api_calls": self.llm_calls}
+
+    monkeypatch.setattr(roleplay_case, "ModelTransport", FakeTransport)
+    invalid = deepcopy(core)
+    invalid["claims"] = None
+    case_dir = tmp_path / "case-01"
+    case_dir.mkdir()
+    invalid_id = "intent-candidate:test-invalid"
+    first = {"case_id": "case-1", "requirement_history": core["requirement_history"],
+             "simulation_transcript": [],
+             "candidate": {"semantic_core": invalid,
+                           "initial_core_validation_errors": ["claims must be a list"]},
+             "steps": {"intent_extraction": {"output_artifacts": [invalid_id]}},
+             "artifacts": {invalid_id: {"payload": None}}}
+    first["artifacts"][invalid_id]["payload"] = first["candidate"]
+    roleplay_case._write_exclusive(case_dir / "attempt-001.json", first)
+    repaired = roleplay_case.run_case(
+        1, repair_candidate_id=invalid_id, repair_attempts=1, run_dir=tmp_path)
+    assert repaired["status"] == "WAITING_RESEARCH_REVIEW"
+    assert repaired["replayed_core_candidate_id"] == invalid_id
+    assert repaired["model_usage_this_attempt"]["api_calls"] == 1
+    assert repaired["steps"]["intent_extraction"]["output_artifacts"] != [invalid_id]
+    assert first == json.loads(
+        (case_dir / "attempt-001.json").read_text(encoding="utf-8"))
+
+
+def test_gemini_provider_and_run_dir_reach_transport(monkeypatch, tmp_path):
+    prompt = "Minh lends Quynh 101 ADA."
+    monkeypatch.setattr(roleplay_case, "load_batch", lambda: ({}, [
+        {"id": "case-1", "prompt": prompt}]))
+    monkeypatch.setattr(roleplay_case, "config_from_environment", lambda: None)
+    seen = {}
+
+    class FakeTransport:
+        model = "fake-gemini"
+
+        def __init__(self, *, before_request, provider=None, **_kwargs):
+            seen["provider"] = provider
+            self.llm_calls = 0
+            self.call_log = []
+
+        def set_call_budget(self, _limit):
+            pass
+
+        def generate(self, _system, _user):
+            raise AssertionError("no model call expected")
+
+        def usage_summary(self):
+            return {"api_calls": 0}
+
+    monkeypatch.setattr(roleplay_case, "ModelTransport", FakeTransport)
+    monkeypatch.setattr(roleplay_case, "run_session", lambda *_a, **_k: {
+        "status": "WAITING_USER", "steps": {}})
+    monkeypatch.setattr("sys.argv", [
+        "roleplay_case", "--case-index", "1", "--provider", "gemini",
+        "--run-dir", str(tmp_path / "holdout")])
+    assert roleplay_case.main() == 0
+    assert seen["provider"] == "gemini"
+    record = json.loads((tmp_path / "holdout" / "case-01" / "attempt-001.json")
+                        .read_text(encoding="utf-8"))
+    assert record["model_provider"] == "gemini"
+    assert record["model_name"] == "fake-gemini"
+    with pytest.raises(ValueError, match="provider"):
+        roleplay_case.run_case(1, run_dir=tmp_path, provider="other")
+
+
+def test_gemini_requests_are_spaced(monkeypatch):
+    clock = {"now": 100.0}
+    sleeps = []
+    monkeypatch.setattr(roleplay_case.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(roleplay_case.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(roleplay_case, "_last_request_at", {"gemini": 98.0})
+    interval = roleplay_case.MIN_REQUEST_INTERVAL_SECONDS["gemini"]
+    assert interval >= 4.0
+    roleplay_case._pace("gemini")
+    assert sleeps == [interval - 2.0]
+    roleplay_case._pace("default")
+    roleplay_case._pace("default")
+    assert len(sleeps) == 1
+
+
+def test_v3_cases_expose_only_the_arm_fields_and_require_aff():
+    import pytest
+
+    case = roleplay_case._case_at(1, "v3")
+    assert set(case) == {"id", "prompt", "language"} and case["id"].startswith("v3-")
+    with pytest.raises(ValueError, match="AFF main path"):
+        roleplay_case.run_case(1, dataset="v3", formalization="DCF")
+
+
+
+def test_aff_replay_of_all_stored_drafts_rebuilds_the_same_attempts():
+    from research.adapters.model_replay import FactDraftReplayModel
+    from research.formalization.fact_extractor import EXAMPLE_DRAFT, EXAMPLE_REQUEST, extract_fact_core
+
+    history = [{"version": 1, "messages": [EXAMPLE_REQUEST]}]
+
+    class Queue:
+        model = "queue"
+
+        def __init__(self, outputs):
+            self.outputs = list(outputs)
+
+        def generate(self, system, user):
+            return self.outputs.pop(0)
+
+    original = extract_fact_core(Queue([{"not": "a draft"}, EXAMPLE_DRAFT]), history)
+    assert len(original["attempts"]) == 2 and original["semantic_core"] is not None
+
+    class NoCalls:
+        model = "none"
+
+        def generate(self, system, user):
+            raise AssertionError("the replay must not call the model")
+
+    stored = [item["draft"] for item in original["attempts"]]
+    replayed = extract_fact_core(FactDraftReplayModel(NoCalls(), stored), history)
+    assert replayed == original
