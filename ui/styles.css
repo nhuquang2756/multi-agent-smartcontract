@@ -7,3 +7,5 @@
 .approval-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.approval-actions .button{font-size:9px}
 
 .history-item{display:block;width:100%;text-align:left;padding:13px;margin-top:8px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}.history-item:hover{border-color:var(--blue)}.history-item b,.history-item small{display:block}.history-item small{margin-top:5px;color:var(--muted)}.field-label{display:block;font-weight:600;margin-bottom:5px}
+
+.preview-banner.connected{border-color:#285747;background:#102019;color:#b6e8d2}.preview-banner.connected .preview-icon{color:#81d8b0}
